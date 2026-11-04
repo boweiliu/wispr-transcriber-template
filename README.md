@@ -1,54 +1,63 @@
-# Your workspace
+<p align="center">
+  <img alt="Wispr Transcriber" src="template.svg" width="480">
+</p>
 
-This folder is your agent's home: everything it knows, everything it builds,
-and the machinery that keeps it running.
+# Wispr Transcriber
 
-## Creations
+<p align="center">
+  <a href="https://studio.imbue.com/open?git_url=https://github.com/boweiliu/wispr-transcriber-template"><img alt="Open in Imbue Studio" height="64" src="https://img.shields.io/badge/Open%20in%20Imbue%20Studio-D8D1C0?style=for-the-badge"></a>
+</p>
 
-Broadly, in Imbue Studio you make "creations". These can be "code" (apps, skills, and
-the services behind them) or "data" (documents, images, notes).
+Didn't work? Create a Studio workspace and paste this to your agent:
+` /use-template https://github.com/boweiliu/wispr-transcriber-template`
 
-Imbue Studio makes this easier by defining some conventions for the common things
-you'll want to make:
+## Why you care
 
-1. an "app" - something you can open as a tab and interact with
-2. a "skill" - teaches your agent how to do work you care about. A skill that
-   is automatically run on a schedule is called an "automation": a routine
-   (see `routines/` and the Routines app; the weekly Caretaker is the
-   built-in example)
-3. some "data" - documents, images, notes, or data created by your apps and
-   skills
-4. some "customizations" - changes to any of the above. Everything in Imbue Studio
-   can be modified by you!
+Turn speech into text through your own Wispr Flow account, with no official API: press record, and see both the word-for-word transcript and Wispr's cleaned-up version.
 
-## What's here
+Wispr Flow is very good at turning speech into clean writing — it strips the "um"s, fixes
+the numbers, and keeps your tone. What it does not have is a door you can walk through:
+their API is closed, and their docs say they are not taking new partners.
 
-- `apps/` - Everything you can open as a tab: the built-in apps (chat, the
-  terminal, Files, the browser, System Monitor) and the apps your agent builds for you. (A shortcut
-  to `system/apps/`.)
-- `skills/` - Everything your agent knows how to do: the built-in skills and
-  the ones it has learned for you. (A shortcut to `.agents/skills/`.)
-- `routines/` - Everything that runs on a schedule, one file each; the
-  Routines app shows them. (A shortcut to `system/routines/`.)
-- `data/` - Your workspace's data: documents and project folders, files
-  you've uploaded, your agent's memories, and each app's stored data.
-- `docs/` - Guides to this workspace: what it is, how it works, and a history
-  of where it came from.
-- `system/` - The machinery that runs the workspace: the apps themselves,
-  background services, scripts, and configuration. You can look around (every
-  folder has a README), and your agent maintains it for you.
+This gives your workspace that door, using **your own Wispr Flow account**. Dictate into a
+page, hand it a voice memo, or call it from a script, and get back text as good as the one
+their app writes into your editor. Nothing on your Mac is touched — no patching, no
+re-signing, no settings changed. If you already pay for Wispr Flow, this is the rest of
+what you are paying for.
 
-A few housekeeping files live alongside them:
+## How to use it
 
-- `README.md` - This file.
-- `CLAUDE.md` - The standing instructions your agent follows.
-- `pyproject.toml` and `uv.lock` - The Python project definition; the tooling
-  requires them at the top level.
+1. **Say yes when your agent asks for access to a folder on your Mac.** One grant, on
+   `~/tmp`. It is how your Wispr Flow sign-in gets across.
+2. **Double-click one file on your Mac.** Your agent puts it there and tells you where; a
+   Terminal window opens, installs a small helper, and says it is running. Once only.
+3. **Open the app and press record.** Speak, press again, and your words come back as text.
 
-## Where things are kept safe
+You need a Mac with Wispr Flow installed and signed in — that account is what does the
+work. After setup, transcribing does not need your Mac at all; it only has to be awake
+about once a week so the sign-in stays fresh, which happens anyway if you use Wispr Flow.
 
-The workspace is a git repository: code and configuration changes are
-committed as your agent works. Everything under `data/` is deliberately kept
-out of git (it can be large, personal, or both) and is protected by the
-workspace's continuous encrypted backup instead, along with the rest of the
-workspace. See `docs/` for details.
+## Ideas for making it yours
+
+- **Dictate straight into your notes.** The app has a plain HTTP interface, so another app
+  or agent in your workspace can hand it audio and get text back.
+- **Transcribe a pile of recordings at once.** `wispr-transcribe <file>` works on any
+  format, so a folder of voice memos becomes a folder of text with a one-line loop.
+- **Send your own vocabulary.** The desktop app passes your personal dictionary along with
+  the audio and this one does not, so unusual names can come back misspelled. The fields
+  are already in the included message format, waiting to be filled in.
+- **Record from the Mac's own microphone.** ffmpeg is usually already there; it needs a
+  microphone permission for the helper, which is a decision worth making deliberately.
+- **Keep a searchable record.** Every run already saves its audio and the full reply, so a
+  search page over your own dictation history is a small addition.
+
+## What this is
+
+This repository is a published **Imbue Studio template**: a clean, bootable
+snapshot of what an agent built, ready to adapt into your own. It is NOT the
+generic workspace template -- it is this specific project.
+
+[`template.md`](template.md) is the full manifest -- what it is, how it
+works, what it needs to run, and what to adapt -- with the
+machine-readable half (recipe, requirements, and the environment it needs
+installed) in [`template.toml`](template.toml).

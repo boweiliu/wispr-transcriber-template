@@ -1,0 +1,106 @@
+# Machine-readable manifest for this template. The sibling
+# template.md holds the prose, the Requirements list, and the two
+# append-only history logs; this file is authoritative for everything
+# below. Both are generated together -- validate_template.py fails if
+# they disagree.
+format = "v2"
+
+[template]
+slug = "wispr-transcriber"
+title = "Wispr Transcriber"
+description = "Turn speech into text through your own Wispr Flow account, with no official API: press record, and see both the word-for-word transcript and Wispr's cleaned-up version."
+thumbnail = "template.svg"
+version = "v1"
+
+# How this template is DERIVED from the workspace it came from. An
+# update re-runs this recipe rather than diffing two repos, which is what
+# keeps an exclusion excluded even though the thing still exists upstream.
+[recipe]
+include = ["system/apps/wispr_transcriber", "system/supervisord.conf.d/wispr-transcriber.conf", ".agents/skills/local-print-bridge"]
+data_include = []
+# The app is developed in an external checkout in the source workspace; only its
+# code ships here, relocated into system/apps/. Its private notes are left out.
+exclude = ["memories/", "data/"]
+modification_rules = [
+  "replace the publisher's Mac home directory and device id in the setup steps with lookup commands and placeholders",
+  "replace the publisher's name throughout the documents with the second person",
+  "replace a real colleague's name in the investigation notes and in the built-in sample clip with neutral wording",
+  "relocate the app from the source workspace's external checkout into system/apps/, and point its program entry and documents at the in-tree paths",
+  "leave out the publisher's private memory notes about the app",
+]
+
+# Everything an adopter must deal with before this is really theirs.
+# One list -- but each entry's KIND says how it is handled, because the
+# two are handled at different times by different mechanisms:
+#
+#   permission / secret / llm = ACTIVATION. The adopting agent acts on
+#   these FIRST and BY ITSELF, initiating each latchkey permission
+#   request and each secret request before asking the user anything.
+#   Every one of them must have a matching requires_ line in template.md
+#   and vice versa -- the validator checks that, because an adopter once
+#   never got prompted for a permission the app needed.
+#
+#   The [[requirements.secret]] entries below were AGGREGATED from the
+#   included apps' app.toml [[secrets]] and skills' SKILL.md secrets:
+#   declarations, plus every data/.secrets/<file>.env the included
+#   mcp-servers.json and supervisord programs run under. Fix a wrong one
+#   at its declaration, not here.
+#
+#   adaptation = worked through INTERACTIVELY with the user afterwards.
+#   Prose on both sides, so it is not cross-checked.
+#
+# The entries below are filled in. For reference, the shapes are:
+#   [[requirements.permission]]
+#   scope = "slack-api"
+#   permission = "slack-read-all"
+#
+#   [requirements.llm]
+#   method = "keyed"   # keyed (an API key, e.g. ANTHROPIC_API_KEY) | keyless (a subscription CLI, e.g. claude -p)
+#
+[requirements]
+
+[[requirements.permission]]
+scope = "file-sharing"
+permission = "minds-file-server-write"
+
+[[requirements.adaptation]]
+summary = "needs a Mac running Wispr Flow, signed in"
+resolution = "the only credential the service accepts is the one the Wispr Flow desktop app stores, so the adopter must have macOS, the app installed, and an account signed into it; there is no Windows or Linux path"
+
+[[requirements.adaptation]]
+summary = "the command bridge on the Mac must be installed by a person"
+resolution = "the local-print-bridge skill ships the installer, but it is a file the adopter double-clicks on their own machine; walk them through it with the app README's steps and the check that proves it worked"
+
+[[requirements.adaptation]]
+summary = "the bridge must be pointed at the right Mac"
+resolution = "write the Mac's home directory and device id into ~/.config/latchkey-dev-workbench/; the app README gives the lookup commands, and the device id can be left unset when the account has one computer"
+
+[[requirements.adaptation]]
+summary = "port 8122 is assumed free"
+resolution = "if the adopting workspace already uses it, change it in the program entry and in the app's PORT default"
+
+[[requirements.adaptation]]
+summary = "the user's personal Wispr dictionary is not sent"
+resolution = "an unusual name can come back misspelled; the fields exist in the included .proto and can be filled from the Mac's Wispr Flow config.json"
+
+# What the included code needs INSTALLED. apt takes bare names: versions
+# are a function of the apt snapshot timestamp, so replaying names at the
+# adopter's timestamp yields versions consistent with the rest of their
+# environment. The other sources are not snapshot-pinned, so for them the
+# recorded version IS the pin (name = version).
+#
+# The entries below are filled in. For reference, the shapes are:
+#   apt = ["poppler-utils"]
+#   [environment.npm_global]
+#   "@slack/cli" = "2.1.0"
+#   [environment.uv_tools]
+#   yt-dlp = "2026.7.1"
+#   [environment.cargo_crates]
+#   fd-find = "9.0.0"
+#
+# For an install with no package database (a URL-fetched binary, a browser),
+# ship a system/scripts/env.d/<NNNN>-<slug>-<name>.sh unit with NNNN >= 2000,
+# include it in the recipe above, and list it in env_d_units.
+[environment]
+apt = ["ffmpeg"]
+env_d_units = []

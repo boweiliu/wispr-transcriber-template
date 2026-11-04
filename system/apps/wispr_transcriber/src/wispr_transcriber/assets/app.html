@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wispr Transcriber</title>
+<style>
+  :root {
+    --ink: #0B292B;
+    --ink-soft: #5b7271;
+    --sand: #F5D6A0;
+    --sand-pale: #FCEFD4;
+    --paper: #FBF7EF;
+    --card: #ffffff;
+    --rule: #e6ded0;
+    --drop: #D26645;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--paper); color: var(--ink);
+    font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue",
+          "Liberation Sans", "DejaVu Sans", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body.dragging { background: var(--sand-pale); }
+
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 24px; border-bottom: 1px solid var(--rule); background: var(--card);
+  }
+  .mark { width: 26px; height: 26px; border-radius: 9px; flex: none; }
+  h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: -0.1px; }
+  .spacer { flex: 1 1 auto; }
+  #signin { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-soft); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #bbb; flex: none; }
+  .dot.ok { background: #3f8f52; }
+  .dot.warn { background: #cf9b26; }
+  .dot.bad { background: var(--drop); }
+
+  main { max-width: 860px; margin: 0 auto; padding: 40px 24px 70px; }
+
+  /* The recorder is the page. */
+  .stage { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  #record {
+    width: 112px; height: 112px; border-radius: 50%; border: none; cursor: pointer;
+    background: var(--ink); color: var(--sand-pale); display: grid; place-items: center;
+    padding: 0; transition: transform .12s ease, background .2s ease;
+  }
+  #record:hover:not(:disabled) { transform: scale(1.04); }
+  #record:disabled { opacity: .45; cursor: default; }
+  #record.live { background: var(--drop); box-shadow: 0 0 0 var(--ring, 0px) rgba(210,102,69,.22); }
+  #record svg { width: 44px; height: 44px; fill: currentColor; grid-area: 1 / 1; }
+  #record svg[hidden] { display: none; }
+  #hint { font-size: 14px; color: var(--ink-soft); margin: 0; text-align: center; min-height: 22px; }
+  #timer { font-variant-numeric: tabular-nums; font-size: 14px; color: var(--drop); font-weight: 600; }
+
+  .alts { font-size: 13px; color: var(--ink-soft); text-align: center; margin: 2px 0 0; }
+  .alts button {
+    font: inherit; font-size: 13px; background: none; border: none; padding: 0;
+    color: var(--ink); text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+  }
+  .alts button:disabled { opacity: .45; cursor: default; }
+  input[type=file] { display: none; }
+
+  #notice, #failed { margin: 22px auto 0; max-width: 620px; font-size: 13.5px; border-radius: 11px; padding: 13px 15px; display: none; }
+  #failed { color: #6d2515; background: #fbe7e1; border: 1px solid #f0c6ba; }
+  #notice { color: #4a3a12; background: var(--sand-pale); border: 1px solid var(--sand); }
+  #notice a { color: inherit; }
+  #notice code { word-break: break-all; font-size: 12px; }
+
+  #result { display: none; margin-top: 38px; }
+  .pair { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 720px) { .pair { grid-template-columns: 1fr; } }
+  .panel { background: var(--card); border: 1px solid var(--rule); border-radius: 13px; padding: 16px 18px; }
+  .panel.hero { border-color: var(--ink); }
+  .label {
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.09em;
+    color: var(--ink-soft); font-weight: 650; margin: 0 0 8px;
+  }
+  .text { font-size: 16.5px; line-height: 1.5; margin: 0; white-space: pre-wrap; }
+  .text.dim { color: var(--ink-soft); font-size: 15px; }
+  s.dropped { color: var(--drop); text-decoration-thickness: 1.5px; }
+  mark.changed { background: var(--sand); color: var(--ink); border-radius: 3px; padding: 0 2px; }
+  mark.added { background: var(--sand-pale); color: var(--ink); border-radius: 3px; padding: 0 2px; }
+
+  .under { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
+  #facts { font-size: 12.5px; color: var(--ink-soft); margin: 0; }
+  audio { height: 30px; }
+  details { margin-top: 10px; }
+  summary { font-size: 12.5px; color: var(--ink-soft); cursor: pointer; }
+  pre {
+    margin: 9px 0 0; max-height: 300px; overflow: auto; font-size: 11.5px; line-height: 1.5;
+    background: var(--ink); color: var(--sand-pale); padding: 12px; border-radius: 9px;
+  }
+
+  #past { margin-top: 32px; display: none; }
+  #past h2 { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--ink-soft); margin: 0 0 6px; }
+  .run {
+    display: flex; gap: 12px; align-items: baseline; padding: 9px 2px;
+    border-top: 1px solid var(--rule); cursor: pointer; font-size: 13.5px;
+  }
+  .run:hover { background: var(--sand-pale); }
+  .run time { font-size: 11.5px; color: var(--ink-soft); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .run span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+<header>
+  <svg class="mark" viewBox="0 0 216 216" aria-hidden="true"><rect width="216" height="216" rx="69.12" fill="#0B292B"/><path d="M108.5 41.5 C122.5 40.8 134.4 52.2 134.1 67.1 L133.2 96.4 C132.8 111.3 120.8 121.4 106.9 121.1 C93.1 120.7 82.2 110.1 82.4 95.2 L83.3 65.9 C83.6 51.8 94.6 42.2 108.5 41.5 Z M66.2 91.6 C66.4 89.3 70.1 87.9 72.3 89.8 C74.4 91.7 73.3 96.9 74.2 102.9 C77.1 120.2 91.2 131.4 108.3 131.6 C125.4 131.9 139.6 120.9 142.9 103.6 C144.1 97.6 142.8 92.3 144.9 90.3 C147.1 88.3 150.7 89.6 151 91.9 C151.8 101.1 149.2 112.3 143.1 121.2 C136.2 131.3 125.4 137.9 113.4 139.9 L113.1 159.8 L131.4 160.6 C134.6 160.8 135.4 165.1 132.2 165.6 L84.9 165.2 C81.7 164.9 82.1 160.6 85.3 160.5 L103.6 159.6 L103.4 139.7 C91.3 138.1 80.3 131.8 73.2 121.9 C66.8 113.2 65.8 102 66.2 91.6 Z" fill="#F5D6A0"/></svg>
+  <h1>Wispr Transcriber</h1>
+  <div class="spacer"></div>
+  <div id="signin"><span class="dot" id="signin-dot"></span><span id="signin-text">Checking&hellip;</span></div>
+</header>
+
+<main>
+  <div class="stage">
+    <button id="record" aria-label="Start recording">
+      <svg id="icon-mic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11Z"/></svg>
+      <svg id="icon-stop" viewBox="0 0 24 24" aria-hidden="true" hidden><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+    </button>
+    <p id="hint">Press to record, then say something.</p>
+    <p class="alts">
+      or <button id="pick">use a recording</button> &middot;
+      <button id="sample">the built-in clip</button> &middot;
+      <button id="say">let your Mac speak</button>
+    </p>
+    <input type="file" id="file" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.ogg,.flac,.webm">
+  </div>
+
+  <div id="notice"></div>
+  <div id="failed"></div>
+
+  <section id="result">
+    <div class="pair">
+      <div class="panel">
+        <p class="label">What Wispr heard, word for word</p>
+        <p class="text dim" id="raw-text"></p>
+      </div>
+      <div class="panel hero">
+        <p class="label">What Wispr sent back</p>
+        <p class="text" id="fmt-text"></p>
+      </div>
+    </div>
+    <div class="under">
+      <audio id="player" controls preload="metadata"></audio>
+      <p id="facts"></p>
+    </div>
+    <details>
+      <summary>Wispr's full reply, exactly as it arrived</summary>
+      <pre id="rawjson">Loading&hellip;</pre>
+    </details>
+  </section>
+
+  <section id="past">
+    <h2>Earlier</h2>
+    <div id="runs"></div>
+  </section>
+</main>
+
+<script src="/app.js" type="module"></script>
+<!-- shell script -->
+</body>
+</html>

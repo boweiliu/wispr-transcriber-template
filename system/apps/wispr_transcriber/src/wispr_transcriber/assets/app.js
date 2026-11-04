@@ -1,0 +1,287 @@
+// Press the button, speak, see what Wispr sends back.
+
+const $ = (id) => document.getElementById(id);
+const els = {
+  dot: $("signin-dot"), signin: $("signin-text"),
+  record: $("record"), micIcon: $("icon-mic"), stopIcon: $("icon-stop"), hint: $("hint"),
+  pick: $("pick"), sample: $("sample"), say: $("say"), file: $("file"),
+  notice: $("notice"), failed: $("failed"),
+  result: $("result"), raw: $("raw-text"), fmt: $("fmt-text"),
+  player: $("player"), facts: $("facts"), rawjson: $("rawjson"),
+  past: $("past"), runs: $("runs"),
+};
+const others = [els.pick, els.sample, els.say];
+
+let recorder = null;
+let chunks = [];
+let startedAt = 0;
+let ticker = null;
+let meter = null;
+
+function setBusy(message) {
+  els.hint.textContent = message || "Press to record, then say something.";
+  els.record.disabled = Boolean(message);
+  others.forEach((button) => { button.disabled = Boolean(message); });
+  if (message) els.failed.style.display = "none";
+}
+
+function fail(message) {
+  els.failed.textContent = message;
+  els.failed.style.display = "block";
+}
+
+function notice(html) {
+  els.notice.innerHTML = html;
+  els.notice.style.display = "block";
+}
+
+async function call(path, options = {}) {
+  const response = await fetch(path, options);
+  let body = {};
+  try { body = await response.json(); } catch { /* empty or non-JSON */ }
+  if (!response.ok) throw new Error(body.detail || `That did not work (${response.status}).`);
+  return body;
+}
+
+// ---- Recording ---------------------------------------------------------------------------
+
+function stopMeter() {
+  if (!meter) return;
+  cancelAnimationFrame(meter.frame);
+  meter.context.close().catch(() => {});
+  meter = null;
+  els.record.style.removeProperty("--ring");
+}
+
+function startMeter(stream) {
+  // The ring breathing with your voice is the only honest proof the microphone is live.
+  const context = new AudioContext();
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 512;
+  context.createMediaStreamSource(stream).connect(analyser);
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  meter = { context, frame: 0 };
+  const draw = () => {
+    analyser.getByteTimeDomainData(data);
+    let peak = 0;
+    for (const value of data) peak = Math.max(peak, Math.abs(value - 128));
+    els.record.style.setProperty("--ring", `${Math.min(26, (peak / 128) * 90)}px`);
+    meter.frame = requestAnimationFrame(draw);
+  };
+  draw();
+}
+
+function showRecording(on) {
+  els.record.classList.toggle("live", on);
+  els.micIcon.hidden = on;
+  els.stopIcon.hidden = !on;
+  els.record.setAttribute("aria-label", on ? "Stop recording" : "Start recording");
+  others.forEach((button) => { button.disabled = on; });
+}
+
+// Keep inside the service's own ceiling, so a long recording is never rejected after the wait.
+const MAX_RECORD_SECONDS = 230;
+
+function tick() {
+  const seconds = (Date.now() - startedAt) / 1000;
+  els.hint.innerHTML = `Listening &mdash; <span id="timer">${seconds.toFixed(1)}s</span> &middot; press again when you are done`;
+  if (seconds >= MAX_RECORD_SECONDS) stopRecording();
+}
+
+/** Put everything back the way it was before recording started. */
+function finishRecording(stream) {
+  stream.getTracks().forEach((track) => track.stop());
+  stopMeter();
+  clearInterval(ticker);
+  ticker = null;
+  recorder = null;
+  showRecording(false);
+  setBusy("");
+}
+
+async function startRecording() {
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (error) {
+    const link = await call("/api/share-link").catch(() => ({}));
+    const where = link.url
+      ? `<a href="${link.url}" target="_blank" rel="noopener">open this page in a browser tab</a>`
+      : "open this page in a browser tab";
+    notice(
+      `<strong>This window will not give the microphone.</strong> App windows here are not allowed to ` +
+      `use it (${error.name}). To speak into it, ${where} and press record there. ` +
+      `Everything else on this page works as it is.`
+    );
+    return;
+  }
+  chunks = [];
+  const wanted = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "";
+  // Hold the recorder and its type in locals: the stop event fires after `recorder` is
+  // cleared, so reading them off the module-level handle there would throw and the
+  // recording would be lost without a word.
+  const instance = new MediaRecorder(stream, wanted ? { mimeType: wanted } : undefined);
+  const mimeType = instance.mimeType || wanted || "audio/webm";
+  recorder = instance;
+
+  instance.addEventListener("dataavailable", (event) => { if (event.data.size) chunks.push(event.data); });
+  instance.addEventListener("error", (event) => {
+    finishRecording(stream);
+    fail(`The recorder stopped unexpectedly (${(event.error && event.error.name) || "unknown"}).`);
+  });
+  instance.addEventListener("stop", () => {
+    finishRecording(stream);
+    try {
+      const blob = new Blob(chunks, { type: mimeType });
+      if (blob.size < 2000) {
+        fail("That was too short to hear. Hold on a moment longer before pressing again.");
+        return;
+      }
+      const name = mimeType.includes("ogg") ? "spoken.ogg" : "spoken.webm";
+      sendFile(new File([blob], name, { type: mimeType }), "Sending what you said to Wispr…");
+    } catch (error) {
+      fail(`The recording could not be packaged up: ${error.message}`);
+    }
+  });
+  instance.start();
+  startedAt = Date.now();
+  showRecording(true);
+  startMeter(stream);
+  tick();
+  ticker = setInterval(tick, 100);
+}
+
+function stopRecording() {
+  // finishRecording runs on the stop event, which also clears `recorder`.
+  if (recorder && recorder.state !== "inactive") recorder.stop();
+}
+
+els.record.addEventListener("click", () => {
+  els.notice.style.display = "none";
+  if (recorder) stopRecording(); else startRecording();
+});
+
+// ---- Drawing one run ---------------------------------------------------------------------
+
+function renderSide(target, segments, fallback) {
+  target.textContent = "";
+  if (!segments || !segments.length) { target.textContent = fallback || ""; return; }
+  for (const part of segments) {
+    let node;
+    if (part.kind === "dropped") { node = document.createElement("s"); node.className = "dropped"; }
+    else if (part.kind === "changed") { node = document.createElement("mark"); node.className = "changed"; }
+    else if (part.kind === "added") { node = document.createElement("mark"); node.className = "added"; }
+    else node = document.createElement("span");
+    node.textContent = part.text;
+    target.appendChild(node);
+  }
+}
+
+function show(run) {
+  renderSide(els.raw, run.diff && run.diff.left, run.raw);
+  renderSide(els.fmt, run.diff && run.diff.right, run.formatted);
+  const edits = run.diff ? run.diff.edits : 0;
+  els.facts.textContent =
+    `${run.audio_seconds}s of audio · back in ${run.round_trip_seconds}s · ` +
+    `${edits} edit${edits === 1 ? "" : "s"} by ${run.origin || "Wispr"} · ${run.server || "Wispr"}`;
+  els.player.src = `/api/runs/${run.id}/audio`;
+  els.rawjson.textContent = "Loading…";
+  fetch(`/api/runs/${run.id}/raw`)
+    .then((response) => response.text())
+    .then((text) => { els.rawjson.textContent = text; })
+    .catch(() => { els.rawjson.textContent = "The saved reply could not be read."; });
+  els.result.style.display = "block";
+}
+
+async function loadRuns({ showLatest = false } = {}) {
+  const { runs } = await call("/api/runs");
+  if (showLatest && runs.length) show(runs[0]);
+  els.runs.textContent = "";
+  els.past.style.display = runs.length > 1 ? "block" : "none";
+  for (const run of runs.slice(showLatest ? 1 : 0)) {
+    const row = document.createElement("div");
+    row.className = "run";
+    row.dataset.runId = run.id;
+    const when = document.createElement("time");
+    when.textContent = new Date(run.at * 1000).toLocaleString();
+    const what = document.createElement("span");
+    what.textContent = run.formatted || run.raw;
+    row.append(when, what);
+    row.addEventListener("click", () => { show(run); window.scrollTo({ top: 0, behavior: "smooth" }); });
+    els.runs.appendChild(row);
+  }
+}
+
+// ---- Sending -----------------------------------------------------------------------------
+
+async function run(message, path, options) {
+  setBusy(message);
+  try {
+    show(await call(path, options));
+    await Promise.all([loadRuns(), loadStatus()]);
+  } catch (error) {
+    fail(error.message);
+  } finally {
+    setBusy("");
+  }
+}
+
+function sendFile(file, message) {
+  if (!file) return;
+  const form = new FormData();
+  form.append("audio", file);
+  run(message || `Sending ${file.name} to Wispr…`, "/api/transcribe", { method: "POST", body: form });
+}
+
+els.pick.addEventListener("click", () => els.file.click());
+els.file.addEventListener("change", () => { sendFile(els.file.files[0]); els.file.value = ""; });
+els.sample.addEventListener("click", () => run("Sending the clip to Wispr…", "/api/sample", { method: "POST" }));
+els.say.addEventListener("click", () => {
+  const text = window.prompt(
+    "What should your Mac say out loud?",
+    "Um, so I think we should, uh, move the team meeting to Thursday at three.",
+  );
+  if (!text) return;
+  run("Asking your Mac to speak it…", "/api/speak", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+});
+
+// The whole page takes a dropped recording; no target to aim at.
+document.addEventListener("dragover", (event) => { event.preventDefault(); document.body.classList.add("dragging"); });
+document.addEventListener("dragleave", (event) => { if (!event.relatedTarget) document.body.classList.remove("dragging"); });
+document.addEventListener("drop", (event) => {
+  event.preventDefault();
+  document.body.classList.remove("dragging");
+  sendFile(event.dataTransfer.files[0]);
+});
+
+// ---- The sign-in pill ----------------------------------------------------------------------
+
+function left(seconds) {
+  if (seconds == null) return "";
+  if (seconds > 172800) return `${Math.round(seconds / 86400)} days left`;
+  if (seconds > 7200) return `${Math.round(seconds / 3600)} hours left`;
+  return `${Math.max(0, Math.round(seconds / 60))} min left`;
+}
+
+async function loadStatus() {
+  try {
+    const state = await call("/api/status");
+    els.dot.className = `dot ${state.signed_in ? (state.needs_mac ? "warn" : "ok") : "bad"}`;
+    els.signin.textContent = state.signed_in
+      ? `${state.email || "Signed in"} · ${left(state.seconds_left)}`
+      : "No Wispr sign-in";
+    if (state.needs_mac && !state.signed_in) {
+      notice("The Wispr sign-in here has run out. Open Wispr Flow on your Mac, then reload this page.");
+    }
+  } catch {
+    els.dot.className = "dot bad";
+    els.signin.textContent = "Cannot reach the app";
+  }
+}
+
+loadStatus();
+loadRuns({ showLatest: true }).catch(() => {});
