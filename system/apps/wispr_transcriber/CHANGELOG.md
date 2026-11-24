@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-11-24 — iOS Safari recording, playback, and copy hardening (v3)
+
+- Hardened iOS Safari recording in `app.js`: read actual MIME type from `chunks[0].type`
+  on stop (Safari often leaves `MediaRecorder.mimeType` blank until `dataavailable`), probe
+  `audio/mp4;codecs=mp4a.40.2` / `audio/mp4` / `audio/aac`, omit timeslice for single-file
+  MP4 integrity, acquire Screen Wake Lock while recording so the phone does not lock mid-
+  dictation, stop cleanly on `track.onended` if iOS interrupts the mic, guard `AudioContext`
+  / `webkitAudioContext` so the volume meter can never break recording, and upload blobs
+  directly via `FormData.append`.
+- Added 1-tap Copy button on the formatted transcript, `playsinline` on `<audio>`, and
+  `touch-action: manipulation` on mobile buttons.
+- Expanded Section 3 of the README with all 6 iOS Safari integration gotchas for agents
+  embedding Wispr into another voice app.
+
 ## 2026-11-24 — read-only file-sharing setup, iOS Safari M4A fix, and drop-in STT API
 
 - Read Wispr Flow's `session.json` directly through a single read-only Imbue Studio

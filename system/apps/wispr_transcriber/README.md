@@ -113,39 +113,69 @@ If you have another web app in this workspace (for example, an essay writing too
 in Safari on your phone) that currently uses Safari's built-in Web Speech API
 (`SpeechRecognition`), replace the speech-to-text layer in two small pieces:
 
-### A. In the phone/browser frontend (works in iOS Safari + desktop browsers)
+### A. In the phone/browser frontend (hardened for iOS Safari + desktop)
 
 Replace `SpeechRecognition` with `MediaRecorder` and POST the recorded audio to **your
-app's own backend** (same origin -- no CORS issues and no extra phone auth):
+app's own backend** (same origin -- no CORS issues and no extra phone auth).
+
+Six iOS Safari details are built into this snippet (and into `assets/app.js`) -- keep them
+when integrating into another app:
+
+1. **HTTPS required:** `navigator.mediaDevices` is `undefined` on plain HTTP on iOS. Open
+   the app via its Imbue Studio share URL (which is HTTPS).
+2. **Dynamic MIME probe + read real type on stop:** iOS Safari records `audio/mp4` (not
+   `webm`), and often leaves `recorder.mimeType` empty until `dataavailable` fires. Always
+   read `(chunks[0] && chunks[0].type) || recorder.mimeType || wanted || "audio/mp4"` in
+   `onstop`.
+3. **No timeslice in `recorder.start()`:** passing a timeslice on iOS Safari can split MP4
+   into non-concatenatable fragments. Call `recorder.start()` with no arguments so `stop()`
+   yields one clean MP4 blob.
+4. **Screen Wake Lock while recording:** iOS Safari 16.4+ supports `navigator.wakeLock`,
+   keeping the screen from auto-locking mid-paragraph during long dictation.
+5. **Handle `track.onended`:** if iOS interrupts the mic (incoming call, screen lock, app
+   switch), stop the recorder cleanly so the captured speech is still sent rather than lost.
+6. **Use `form.append("audio", blob, filename)`** (rather than `new File(...)`) and set
+   `touch-action: manipulation` on the mic button to prevent iOS double-tap zoom.
 
 ```js
-// Pick a container the browser actually supports (iOS Safari uses audio/mp4; Chrome uses webm).
-const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-  ? "audio/webm;codecs=opus"
-  : MediaRecorder.isTypeSupported("audio/mp4")
-    ? "audio/mp4"
-    : "";
+function pickMime() {
+  if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported) return "";
+  for (const t of ["audio/webm;codecs=opus", "audio/webm", "audio/mp4;codecs=mp4a.40.2", "audio/mp4", "audio/aac"]) {
+    if (MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return "";
+}
 
+const wanted = pickMime();
 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+const recorder = new MediaRecorder(stream, wanted ? { mimeType: wanted } : undefined);
 const chunks = [];
-recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+let wakeLock = null;
+try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {}
+
+recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
 recorder.onstop = async () => {
   stream.getTracks().forEach((t) => t.stop());
-  const actualType = recorder.mimeType || mimeType || "audio/mp4";
-  const ext = actualType.includes("mp4") ? "m4a" : actualType.includes("ogg") ? "ogg" : "webm";
+  wakeLock?.release().catch(() => {});
+  const actualType = (chunks[0] && chunks[0].type) || recorder.mimeType || wanted || "audio/mp4";
+  const ext = actualType.includes("mp4") || actualType.includes("aac") ? "m4a"
+    : actualType.includes("ogg") ? "ogg" : "webm";
   const form = new FormData();
   form.append("audio", new Blob(chunks, { type: actualType }), `dictation.${ext}`);
   const res = await fetch("/api/dictate", { method: "POST", body: form });
   const data = await res.json();
   // data.formatted (or data.text) has punctuated, filler-free Wispr text
 };
-recorder.start();
+stream.getAudioTracks().forEach((t) => {
+  t.onended = () => { if (recorder.state !== "inactive") recorder.stop(); };
+});
+recorder.start(); // no timeslice -- keeps iOS Safari MP4 as a single valid container
 ```
 
-### B. In your app's backend (server-side proxy to `127.0.0.1:8122`)
+### B. In your app's backend (either call `127.0.0.1:8122` or embed `wispr_transcriber` directly)
 
-Forward the uploaded audio to Wispr Transcriber's local HTTP server. Either endpoint works:
+Either forward the uploaded audio to Wispr Transcriber's local HTTP server, or copy/embed
+`audio.py`, `mac_link.py`, and `flow_client.py` directly into your app's own backend.
 
 **Option 1 — Native endpoint (`POST /api/transcribe`):**
 
@@ -175,11 +205,12 @@ Also supports `response_format=text` (plain text) and `response_format=verbose_j
 (full summary including both `text` and `raw`). Any client library pointing its base URL
 at `http://127.0.0.1:8122/v1` works directly with no API key.
 
-**Notes for iOS Safari / phone use:**
-- `audio.py` decodes audio via a seekable temp file so non-fragmented `.m4a`/`.mp4` clips
-  from iOS Safari and Voice Memos work at any length up to the 4-minute single-stream cap.
-- If a user talks longer than ~3.5 minutes, split or stop-and-send in chunks and append
-  the returned text into the editor.
+**Server-side iOS M4A note:**
+- `audio.py` decodes via a seekable temp file (never `ffmpeg -i pipe:0`), because iOS
+  Safari and Apple Voice Memos put the MP4 `moov` atom at the end of the file, which fails
+  on an unseekable pipe once the clip exceeds ffmpeg's probe buffer (~10-15s).
+- Single-stream ceiling is 4 minutes (`MAX_AUDIO_SECONDS = 240`). If a user speaks longer
+  than ~3.5 minutes, stop-and-send in chunks and append the returned text into the editor.
 
 ---
 

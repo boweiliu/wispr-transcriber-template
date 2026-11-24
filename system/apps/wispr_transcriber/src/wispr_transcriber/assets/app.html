@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Wispr Transcriber</title>
 <style>
   :root {
@@ -45,6 +45,7 @@
     width: 112px; height: 112px; border-radius: 50%; border: none; cursor: pointer;
     background: var(--ink); color: var(--sand-pale); display: grid; place-items: center;
     padding: 0; transition: transform .12s ease, background .2s ease;
+    touch-action: manipulation; -webkit-tap-highlight-color: transparent; user-select: none;
   }
   #record:hover:not(:disabled) { transform: scale(1.04); }
   #record:disabled { opacity: .45; cursor: default; }
@@ -73,6 +74,14 @@
   @media (max-width: 720px) { .pair { grid-template-columns: 1fr; } }
   .panel { background: var(--card); border: 1px solid var(--rule); border-radius: 13px; padding: 16px 18px; }
   .panel.hero { border-color: var(--ink); }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px; }
+  .panel-head .label { margin: 0; }
+  .copy-btn {
+    font: inherit; font-size: 12px; padding: 3px 9px; border-radius: 7px;
+    border: 1px solid var(--rule); background: var(--paper); color: var(--ink);
+    cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+  }
+  .copy-btn:active { background: var(--sand-pale); }
   .label {
     font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.09em;
     color: var(--ink-soft); font-weight: 650; margin: 0 0 8px;
@@ -137,12 +146,15 @@
         <p class="text dim" id="raw-text"></p>
       </div>
       <div class="panel hero">
-        <p class="label">What Wispr sent back</p>
+        <div class="panel-head">
+          <p class="label">What Wispr sent back</p>
+          <button type="button" class="copy-btn" id="copy-fmt">Copy</button>
+        </div>
         <p class="text" id="fmt-text"></p>
       </div>
     </div>
     <div class="under">
-      <audio id="player" controls preload="metadata"></audio>
+      <audio id="player" controls playsinline preload="metadata"></audio>
       <p id="facts"></p>
     </div>
     <details>

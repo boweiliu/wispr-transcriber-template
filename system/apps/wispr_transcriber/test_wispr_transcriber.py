@@ -319,9 +319,23 @@ def test_the_service_reports_itself_up(client) -> None:
 def test_the_page_renders_with_the_record_button_and_the_shell_script(client) -> None:
     body = client.get("/").get_data(as_text=True)
     assert "Press to record" in body
+    assert 'id="copy-fmt"' in body
+    assert "playsinline" in body
     # The placeholder must be replaced, or the window loses its link to the workspace.
     assert "<!-- shell script -->" not in body
     assert "connectToShell" in body
+
+
+def test_run_audio_supports_byte_range_requests_for_ios_safari(client) -> None:
+    """iOS Safari <audio> requires HTTP 206 byte-range responses to play back recordings."""
+    wav = audio.to_wav(audio.to_pcm(make_wav(seconds=0.5, rate=16000, channels=1)))
+    summary = runner.save_run(
+        {"id": "22222222-3333-4444-5555-666666666666", "at": 2, "formatted": "Hi"}, wav, []
+    )
+    partial = client.get(f"/api/runs/{summary['id']}/audio", headers={"Range": "bytes=0-63"})
+    assert partial.status_code == 206
+    assert len(partial.get_data()) == 64
+    assert partial.headers.get("Accept-Ranges") == "bytes"
 
 
 def test_asking_to_transcribe_nothing_is_refused_in_plain_words(client) -> None:

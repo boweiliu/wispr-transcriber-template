@@ -6,7 +6,7 @@ const els = {
   record: $("record"), micIcon: $("icon-mic"), stopIcon: $("icon-stop"), hint: $("hint"),
   pick: $("pick"), sample: $("sample"), say: $("say"), sayWrap: $("say-wrap"), file: $("file"),
   notice: $("notice"), failed: $("failed"),
-  result: $("result"), raw: $("raw-text"), fmt: $("fmt-text"),
+  result: $("result"), raw: $("raw-text"), fmt: $("fmt-text"), copyFmt: $("copy-fmt"),
   player: $("player"), facts: $("facts"), rawjson: $("rawjson"),
   past: $("past"), runs: $("runs"),
 };
@@ -17,6 +17,8 @@ let chunks = [];
 let startedAt = 0;
 let ticker = null;
 let meter = null;
+let wakeLock = null;
+let currentFormattedText = "";
 
 function setBusy(message) {
   els.hint.textContent = message || "Press to record, then say something.";
@@ -43,7 +45,7 @@ async function call(path, options = {}) {
   return body;
 }
 
-// ---- Recording ---------------------------------------------------------------------------
+// ---- Recording (desktop + iOS Safari) ----------------------------------------------------
 
 function stopMeter() {
   if (!meter) return;
@@ -54,21 +56,74 @@ function stopMeter() {
 }
 
 function startMeter(stream) {
-  // The ring breathing with your voice is the only honest proof the microphone is live.
-  const context = new AudioContext();
-  const analyser = context.createAnalyser();
-  analyser.fftSize = 512;
-  context.createMediaStreamSource(stream).connect(analyser);
-  const data = new Uint8Array(analyser.frequencyBinCount);
-  meter = { context, frame: 0 };
-  const draw = () => {
-    analyser.getByteTimeDomainData(data);
-    let peak = 0;
-    for (const value of data) peak = Math.max(peak, Math.abs(value - 128));
-    els.record.style.setProperty("--ring", `${Math.min(26, (peak / 128) * 90)}px`);
-    meter.frame = requestAnimationFrame(draw);
-  };
-  draw();
+  // The ring breathing with your voice is the honest proof the microphone is live.
+  // Wrapped in try/catch because iOS Safari can suspend or refuse AudioContext while recording.
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const context = new AudioCtx();
+    if (context.state === "suspended") context.resume().catch(() => {});
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 512;
+    context.createMediaStreamSource(stream).connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    meter = { context, frame: 0 };
+    const draw = () => {
+      analyser.getByteTimeDomainData(data);
+      let peak = 0;
+      for (const value of data) peak = Math.max(peak, Math.abs(value - 128));
+      els.record.style.setProperty("--ring", `${Math.min(26, (peak / 128) * 90)}px`);
+      meter.frame = requestAnimationFrame(draw);
+    };
+    draw();
+  } catch {
+    meter = null;
+  }
+}
+
+async function acquireWakeLock() {
+  // iOS Safari 16.4+ supports Screen Wake Lock; keeps the phone awake during longer dictation.
+  try {
+    if (navigator.wakeLock && typeof navigator.wakeLock.request === "function") {
+      wakeLock = await navigator.wakeLock.request("screen");
+    }
+  } catch {
+    wakeLock = null;
+  }
+}
+
+function releaseWakeLock() {
+  if (!wakeLock) return;
+  const lock = wakeLock;
+  wakeLock = null;
+  lock.release().catch(() => {});
+}
+
+function pickRecorderMimeType() {
+  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") {
+    return "";
+  }
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4;codecs=mp4a.40.2",
+    "audio/mp4",
+    "audio/aac",
+  ];
+  for (const type of candidates) {
+    try {
+      if (MediaRecorder.isTypeSupported(type)) return type;
+    } catch { /* ignore unsupported probes */ }
+  }
+  return "";
+}
+
+function filenameForMime(mimeType) {
+  const lower = (mimeType || "").toLowerCase();
+  if (lower.includes("mp4") || lower.includes("aac") || lower.includes("m4a")) return "spoken.m4a";
+  if (lower.includes("ogg")) return "spoken.ogg";
+  if (lower.includes("wav")) return "spoken.wav";
+  return "spoken.webm";
 }
 
 function showRecording(on) {
@@ -92,6 +147,7 @@ function tick() {
 function finishRecording(stream) {
   stream.getTracks().forEach((track) => track.stop());
   stopMeter();
+  releaseWakeLock();
   clearInterval(ticker);
   ticker = null;
   recorder = null;
@@ -100,6 +156,18 @@ function finishRecording(stream) {
 }
 
 async function startRecording() {
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+    notice(
+      "<strong>Microphone access is unavailable on this page.</strong> On iOS Safari and desktop " +
+      "browsers, microphone recording requires HTTPS (open this app via its Imbue Studio share link)."
+    );
+    return;
+  }
+  if (typeof MediaRecorder === "undefined") {
+    fail("This browser does not support audio recording. Use 'use a recording' to upload a clip instead.");
+    return;
+  }
+
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -115,20 +183,18 @@ async function startRecording() {
     );
     return;
   }
+
   chunks = [];
-  const wanted = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-    ? "audio/webm;codecs=opus"
-    : MediaRecorder.isTypeSupported("audio/mp4")
-      ? "audio/mp4"
-      : "";
+  const wanted = pickRecorderMimeType();
   // Hold the recorder and its type in locals: the stop event fires after `recorder` is
   // cleared, so reading them off the module-level handle there would throw and the
   // recording would be lost without a word.
   const instance = new MediaRecorder(stream, wanted ? { mimeType: wanted } : undefined);
-  const mimeType = instance.mimeType || wanted || "audio/webm";
   recorder = instance;
 
-  instance.addEventListener("dataavailable", (event) => { if (event.data.size) chunks.push(event.data); });
+  instance.addEventListener("dataavailable", (event) => {
+    if (event.data && event.data.size) chunks.push(event.data);
+  });
   instance.addEventListener("error", (event) => {
     finishRecording(stream);
     fail(`The recorder stopped unexpectedly (${(event.error && event.error.name) || "unknown"}).`);
@@ -136,21 +202,32 @@ async function startRecording() {
   instance.addEventListener("stop", () => {
     finishRecording(stream);
     try {
-      const blob = new Blob(chunks, { type: mimeType });
-      if (blob.size < 2000) {
+      // iOS Safari often leaves instance.mimeType empty until dataavailable fires.
+      const actualMime = (chunks[0] && chunks[0].type) || instance.mimeType || wanted || "audio/mp4";
+      const blob = new Blob(chunks, { type: actualMime });
+      if (blob.size < 500) {
         fail("That was too short to hear. Hold on a moment longer before pressing again.");
         return;
       }
-      const name = mimeType.includes("mp4") ? "spoken.m4a" : mimeType.includes("ogg") ? "spoken.ogg" : "spoken.webm";
-      sendFile(new File([blob], name, { type: mimeType }), "Sending what you said to Wispr…");
+      sendBlob(blob, filenameForMime(actualMime), "Sending what you said to Wispr…");
     } catch (error) {
       fail(`The recording could not be packaged up: ${error.message}`);
     }
   });
+
+  // If iOS interrupts the mic (screen lock, phone call, switching apps), stop cleanly so we keep the audio.
+  stream.getAudioTracks().forEach((track) => {
+    track.addEventListener("ended", () => {
+      if (recorder === instance && instance.state !== "inactive") stopRecording();
+    });
+  });
+
+  // Do not pass a timeslice: iOS Safari produces one clean MP4 container when started without one.
   instance.start();
   startedAt = Date.now();
   showRecording(true);
   startMeter(stream);
+  acquireWakeLock();
   tick();
   ticker = setInterval(tick, 100);
 }
@@ -182,8 +259,10 @@ function renderSide(target, segments, fallback) {
 }
 
 function show(run) {
+  currentFormattedText = run.formatted || run.raw || "";
   renderSide(els.raw, run.diff && run.diff.left, run.raw);
   renderSide(els.fmt, run.diff && run.diff.right, run.formatted);
+  if (els.copyFmt) els.copyFmt.textContent = "Copy";
   const edits = run.diff ? run.diff.edits : 0;
   els.facts.textContent =
     `${run.audio_seconds}s of audio · back in ${run.round_trip_seconds}s · ` +
@@ -195,6 +274,30 @@ function show(run) {
     .then((text) => { els.rawjson.textContent = text; })
     .catch(() => { els.rawjson.textContent = "The saved reply could not be read."; });
   els.result.style.display = "block";
+}
+
+if (els.copyFmt) {
+  els.copyFmt.addEventListener("click", async () => {
+    if (!currentFormattedText) return;
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        await navigator.clipboard.writeText(currentFormattedText);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = currentFormattedText;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+      }
+      els.copyFmt.textContent = "Copied";
+      setTimeout(() => { els.copyFmt.textContent = "Copy"; }, 1800);
+    } catch {
+      els.copyFmt.textContent = "Select text to copy";
+    }
+  });
 }
 
 async function loadRuns({ showLatest = false } = {}) {
@@ -230,11 +333,16 @@ async function run(message, path, options) {
   }
 }
 
+function sendBlob(blob, filename, message) {
+  if (!blob) return;
+  const form = new FormData();
+  form.append("audio", blob, filename || "recording.m4a");
+  run(message || `Sending ${filename || "recording"} to Wispr…`, "/api/transcribe", { method: "POST", body: form });
+}
+
 function sendFile(file, message) {
   if (!file) return;
-  const form = new FormData();
-  form.append("audio", file);
-  run(message || `Sending ${file.name} to Wispr…`, "/api/transcribe", { method: "POST", body: form });
+  sendBlob(file, file.name || "recording.m4a", message);
 }
 
 els.pick.addEventListener("click", () => els.file.click());

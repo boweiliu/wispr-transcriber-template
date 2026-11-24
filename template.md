@@ -2,7 +2,7 @@
 title: "Wispr Transcriber"
 description: "Turn speech into text through your own Wispr Flow account, with no official API: drop-in HTTP/OpenAI speech-to-text for phone or web apps plus a recorder page."
 thumbnail: "template.svg"
-version: v2
+version: v3
 format: v2
 ---
 
@@ -66,7 +66,7 @@ asleep.
 
 ## Recipe
 
-This template is version `v2`. It is not a fork of the
+This template is version `v3`. It is not a fork of the
 workspace it came from -- it is DERIVED from it by a recipe: include these
 paths, leave these out, apply these published-version rules. An update re-runs
 the recipe against the current workspace and publishes the result as the next
@@ -185,6 +185,8 @@ This is distinct from "Adaptation history" below, which is the ADOPTERS' log.
 ### v1 (2026-11-04) -- first publication: the app, the command line, the Mac bridge, and the setup and investigation documents.
 
 ### v2 (2026-11-24) -- read-only Mac file-sharing setup (no Mac bridge needed), iOS Safari M4A fix, always-on service, OpenAI-compatible /v1/audio/transcriptions endpoint, and drop-in STT setup instructions.
+
+### v3 (2026-11-24) -- iOS Safari recording hardening (MP4 MIME detection on stop, Screen Wake Lock, mic-interrupt recovery, safe AudioContext meter, 1-tap copy, byte-range audio test, and iOS integration guide).
 
 ## Adaptation history
 
