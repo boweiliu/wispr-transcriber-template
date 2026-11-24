@@ -4,7 +4,7 @@ const $ = (id) => document.getElementById(id);
 const els = {
   dot: $("signin-dot"), signin: $("signin-text"),
   record: $("record"), micIcon: $("icon-mic"), stopIcon: $("icon-stop"), hint: $("hint"),
-  pick: $("pick"), sample: $("sample"), say: $("say"), file: $("file"),
+  pick: $("pick"), sample: $("sample"), say: $("say"), sayWrap: $("say-wrap"), file: $("file"),
   notice: $("notice"), failed: $("failed"),
   result: $("result"), raw: $("raw-text"), fmt: $("fmt-text"),
   player: $("player"), facts: $("facts"), rawjson: $("rawjson"),
@@ -116,7 +116,11 @@ async function startRecording() {
     return;
   }
   chunks = [];
-  const wanted = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "";
+  const wanted = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+    ? "audio/webm;codecs=opus"
+    : MediaRecorder.isTypeSupported("audio/mp4")
+      ? "audio/mp4"
+      : "";
   // Hold the recorder and its type in locals: the stop event fires after `recorder` is
   // cleared, so reading them off the module-level handle there would throw and the
   // recording would be lost without a word.
@@ -137,7 +141,7 @@ async function startRecording() {
         fail("That was too short to hear. Hold on a moment longer before pressing again.");
         return;
       }
-      const name = mimeType.includes("ogg") ? "spoken.ogg" : "spoken.webm";
+      const name = mimeType.includes("mp4") ? "spoken.m4a" : mimeType.includes("ogg") ? "spoken.ogg" : "spoken.webm";
       sendFile(new File([blob], name, { type: mimeType }), "Sending what you said to Wispr…");
     } catch (error) {
       fail(`The recording could not be packaged up: ${error.message}`);
@@ -270,12 +274,33 @@ function left(seconds) {
 async function loadStatus() {
   try {
     const state = await call("/api/status");
+    if (els.sayWrap) els.sayWrap.hidden = !state.deskrun_available;
     els.dot.className = `dot ${state.signed_in ? (state.needs_mac ? "warn" : "ok") : "bad"}`;
     els.signin.textContent = state.signed_in
       ? `${state.email || "Signed in"} · ${left(state.seconds_left)}`
       : "No Wispr sign-in";
     if (state.needs_mac && !state.signed_in) {
-      notice("The Wispr sign-in here has run out. Open Wispr Flow on your Mac, then reload this page.");
+      notice(
+        'The Wispr sign-in here is missing or expired. Make sure Wispr Flow is signed in on your Mac ' +
+        'and <code>~/Library/Application Support/Wispr Flow</code> is shared, then ' +
+        '<button type="button" id="refresh-signin">refresh sign-in</button>.'
+      );
+      const btn = document.getElementById("refresh-signin");
+      if (btn) {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          btn.textContent = "refreshing…";
+          try {
+            await call("/api/refresh-signin", { method: "POST" });
+            els.notice.style.display = "none";
+            await loadStatus();
+          } catch (error) {
+            fail(error.message);
+            btn.disabled = false;
+            btn.textContent = "refresh sign-in";
+          }
+        });
+      }
     }
   } catch {
     els.dot.className = "dot bad";

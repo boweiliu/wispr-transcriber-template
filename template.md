@@ -1,8 +1,8 @@
 ---
 title: "Wispr Transcriber"
-description: "Turn speech into text through your own Wispr Flow account, with no official API: press record, and see both the word-for-word transcript and Wispr's cleaned-up version."
+description: "Turn speech into text through your own Wispr Flow account, with no official API: drop-in HTTP/OpenAI speech-to-text for phone or web apps plus a recorder page."
 thumbnail: "template.svg"
-version: v1
+version: v2
 format: v2
 ---
 
@@ -16,21 +16,20 @@ follow "How to adapt it" below.
 
 ## What it is
 
-Turn speech into text through your own Wispr Flow account, with no official API: press record, and see both the word-for-word transcript and Wispr's cleaned-up version.
+Turn speech into text through your own Wispr Flow account, with no official API: drop-in HTTP/OpenAI speech-to-text for phone or web apps plus a recorder page.
 
-Wispr Flow is a dictation app: you speak, and it writes what you said, cleaned up — fillers
-removed, numbers and names formatted. It has an official API, but it is closed; their docs
-say they are not taking new partners. This template lets a workspace use it anyway, through
-the adopter's **own** Wispr Flow account, by making the same calls the Wispr Flow desktop app
-makes. Nothing on the Mac is modified: no patching, no re-signing, no injected config.
+Wispr Flow is a dictation app: you speak, and it writes what you said, cleaned up --
+fillers removed, punctuation added, numbers and names formatted. Its official API is
+closed (not taking new partners). This template lets your workspace call Wispr Flow's own
+transcription servers using the adopter's **own** Wispr Flow desktop sign-in token, read
+safely via a single read-only Imbue Studio file-sharing grant. Nothing on the Mac is
+modified, patched, or installed.
 
-What the user sees is a page with one big record button. They press it, speak, press again,
-and a moment later two panels appear: on the left what Wispr heard word for word, on the
-right what Wispr sent back after its own clean-up, with the dropped fillers struck through
-and rewritten words highlighted. Underneath are the audio they just recorded, how long the
-round trip took, and which machine in Wispr's fleet answered. A file of any format can be
-dropped on the page instead, and there is a built-in clip for trying it with nothing set up.
-There is a command-line version too, for scripts and other agents.
+It works both as a standalone recorder page and as an always-on local speech-to-text
+backend (`http://127.0.0.1:8122`) that any other app in the workspace -- including a web
+app you open in Safari on your phone -- can call to replace built-in browser dictation.
+It exposes both a native route (`POST /api/transcribe`) and an OpenAI Whisper-compatible
+drop-in route (`POST /v1/audio/transcriptions`), plus a CLI (`wispr-transcribe`).
 
 ## How it works
 
@@ -39,37 +38,35 @@ from the original agent onto a clean default-workspace-template base):
 
 - `system/apps/wispr_transcriber`
 - `system/supervisord.conf.d/wispr-transcriber.conf`
-- `.agents/skills/local-print-bridge`
 
 What each path is:
 
-- **`system/apps/wispr_transcriber`** — the whole app. Four small modules with one job each:
-  `audio.py` converts anything ffmpeg reads into the 16 kHz mono audio Wispr wants;
-  `mac_link.py` owns the connection to the Mac and the sign-in copied from it;
-  `flow_client.py` makes the one call that leaves the machine; `runner.py` is the Flask
-  page and `cli.py` the command. Its `docs/` carry the design and the investigation that
-  produced it, and `test_wispr_transcriber.py` holds 30 tests that touch neither Wispr nor
-  the Mac.
-- **`system/supervisord.conf.d/wispr-transcriber.conf`** — the program entry. It syncs the
-  app's own environment, registers port **8122** with `forward_port.py` so the window gets
-  its own origin, then runs the app.
-- **`.agents/skills/local-print-bridge`** — the channel to the Mac. Its `bin/deskrun` runs
-  one shell command there, which is how the sign-in is fetched and how the Mac is asked to
-  speak a line. Despite the name, this app uses it for neither printing nor anything else.
+- **`system/apps/wispr_transcriber`** -- the whole app. Four small modules with one job
+  each: `audio.py` converts any format ffmpeg reads (including iOS Safari `audio/mp4` /
+  `.m4a` and desktop `webm`) via a seekable temp file into 16 kHz mono PCM; `mac_link.py`
+  reads `session.json` from the adopter's synced or shared `~/Library/Application Support/Wispr Flow`
+  folder and stores a mode-600 copy; `flow_client.py` streams audio over gRPC to
+  `inference.wisprflow.com:443` carrying only the adopter's bearer token; `runner.py`
+  serves the recorder UI, `/api/transcribe`, and `/v1/audio/transcriptions`; `cli.py`
+  provides `wispr-transcribe`. `app.toml` sets `stop_when_no_windows = false` so the HTTP
+  service stays running for other apps even when its own window is closed.
+- **`system/supervisord.conf.d/wispr-transcriber.conf`** -- the program entry. It syncs
+  the app's own environment, registers port **8122** with `forward_port.py`, and runs the
+  service.
 
-How it fits together at runtime: the page posts audio to the app; the app converts it,
-reads the stored sign-in, and opens a gRPC stream to `inference.wisprflow.com` carrying
-only the adopter's own bearer token. Every run is saved under
-`data/.apps/wispr-transcriber/` — the audio exactly as sent, and Wispr's full reply — and
-both are reachable from the page, so the two-panel view never stands between the user and
-what actually happened.
+Every transcription run is saved under `data/.apps/wispr-transcriber/` -- the exact audio
+sent, Wispr's full unprocessed stream reply, and the side-by-side summary.
 
-**The Mac is needed only for the sign-in, never to transcribe.** The sign-in lasts about
-five days and the app re-reads it by itself when it is within twelve hours of running out.
+**The Mac is needed only to keep the sign-in fresh, never to transcribe.** The sign-in
+lasts about 5.5 days; never refresh Supabase tokens from the workspace (rotating them
+could sign out the Mac app). With a synchronized read-only copy of
+`~/Library/Application Support/Wispr Flow`, the workspace reads the refreshed token
+locally whenever the Mac app updates it, and keeps transcribing even while the Mac is
+asleep.
 
 ## Recipe
 
-This template is version `v1`. It is not a fork of the
+This template is version `v2`. It is not a fork of the
 workspace it came from -- it is DERIVED from it by a recipe: include these
 paths, leave these out, apply these published-version rules. An update re-runs
 the recipe against the current workspace and publishes the result as the next
@@ -95,35 +92,45 @@ theirs. Two kinds of entry, handled at different times:
 
 ACTIVATION
 
-- requires_permission: file-sharing / minds-file-server-write for `~/tmp` on the adopter's
-  Mac (user-approved; the adopting agent initiates this via a latchkey permission request
-  during setup -- it must not merely mention it). This is the only grant. It is how the
-  Wispr Flow sign-in and any recorded audio travel back from the Mac.
+- requires_permission: file-sharing / minds-file-server-read for
+  `~/Library/Application Support/Wispr Flow` on the adopter's Mac, with `"sync": {"conflict": "NEWER"}`
+  enabled (user-approved; the adopting agent initiates this via a latchkey permission
+  request during setup -- it must not merely mention it). This is the only grant: read-only,
+  no Mac helper or Terminal installer needed. Look up the Mac's `device_id` via
+  `latchkey curl -s http://latchkey-self.invalid/devices`, then POST to
+  `http://latchkey-self.invalid/permission-requests` with `-H "X-Latchkey-Device: <device_id>"`
+  and payload `{"path": "~/Library/Application Support/Wispr Flow", "access": "READ", "sync": {"conflict": "NEWER"}}`.
+  After approval, run `system/apps/wispr_transcriber/.venv/bin/wispr-mac-link refresh` and
+  `system/apps/wispr_transcriber/.venv/bin/wispr-transcribe --check` to verify end to end.
 
 There are no secrets and no LLM: the app calls no model and holds no API key. The only
-credential is the adopter's own Wispr Flow sign-in, which is copied from their Mac and
-never typed in.
+credential is the adopter's own Wispr Flow sign-in, read from `session.json` on their Mac
+and never typed in.
 
 ADAPTATION
 
-- **A Mac with Wispr Flow on it, signed in.** This is the whole premise and nothing in the
-  template can supply it: the only credential Wispr's servers accept is the one their
-  desktop app stores. The adopter needs macOS, Wispr Flow installed, and an account they
-  have signed into at least once. There is no Windows or Linux path.
-- **The command bridge must be installed on that Mac, and only a human can start it.** The
-  `local-print-bridge` skill ships the installer, but it is a file the adopter
-  double-clicks on their own machine; an agent cannot run it for them. The app's README has
-  the exact steps and the check that proves it worked. Until it is installed, the sign-in
-  cannot be fetched and the app has nothing to authenticate with.
-- **Point the bridge at the right Mac.** The Mac's home directory and device id go in
-  `~/.config/latchkey-dev-workbench/`; the app's README gives the two commands that look
-  them up. With one computer on the account the device id can be left unset.
+- **A Mac with Wispr Flow installed and signed in.** The only credential Wispr's servers
+  accept is the one their macOS desktop app keeps in
+  `~/Library/Application Support/Wispr Flow/session.json`. There is no Windows or Linux
+  path.
+- **Keep the synchronized copy enabled when approving (recommended).** Leaving sync on
+  copies `session.json` into `~/synced_folders/` so the workspace can refresh the token
+  automatically without waking the Mac. If sync is turned off, `wispr-mac-link` still
+  works automatically over the read-only file server while the Mac is awake.
+- **Wire your other apps (for example, a phone/Safari essay writing tool) to it.**
+  `system/apps/wispr_transcriber/README.md` (Section 3) has the exact drop-in snippet:
+  replace Safari's Web Speech API (`SpeechRecognition`) with `MediaRecorder` (`audio/mp4`
+  on iOS Safari, `audio/webm` on desktop), POST the recording to your own app's backend
+  (same origin -- no CORS or extra phone auth), and forward server-side to
+  `POST http://127.0.0.1:8122/api/transcribe` (field `audio` -> `{"formatted": "...", "raw": "..."}`)
+  or `POST http://127.0.0.1:8122/v1/audio/transcriptions` (OpenAI Whisper drop-in, field
+  `file` -> `{"text": "..."}`).
 - **Port 8122 is assumed free.** If the adopting workspace already uses it, change it in
   `system/supervisord.conf.d/wispr-transcriber.conf` and in the app's `PORT` default.
-- **Personal vocabulary is not sent.** The desktop app passes the user's own dictionary
-  along with the audio, and this client does not, so an unusual name can come back
-  misspelled. The fields exist in the included `.proto`; filling them from the Mac's
-  `config.json` is the fix and has not been done.
+- **Personal vocabulary is not sent yet.** The desktop app passes the user's own
+  dictionary along with the audio, and this client does not, so an unusual name can come
+  back misspelled. The fields exist in `flow_api.proto`; filling them from `config.json`
+  is a small follow-up if needed.
 
 ## Environment
 
@@ -134,9 +141,9 @@ out consistent with the rest of that agent's environment rather than frozen to
 whatever this publisher happened to have.
 
 - **ffmpeg**: every piece of audio is converted to the one format Wispr's servers accept
-  (16 kHz mono 16-bit), and ffmpeg is what reads the adopter's m4a, mp3, webm or wav and
-  resamples it properly. Without it the app starts but refuses every recording with a
-  message saying so.
+  (16 kHz mono 16-bit PCM), and ffmpeg reads iOS Safari's `audio/mp4`/`.m4a`, desktop
+  `webm`, `mp3`, `ogg`, or `wav` and resamples properly. Without it the app starts but
+  refuses every recording with a clear message.
 
 Nothing else. The app's Python dependencies come from its own lock file, which the program
 syncs on start.
@@ -153,16 +160,16 @@ new agent. This is the `use-template` skill's template path; in short:
 2. Present the template to the user in plain, non-technical language: what
    it is, what it does, and what it needs from them (name the activation
    requirements).
-3. Ask whether they want to use the same connectors (e.g. their own Slack).
-   If YES: ACTIVATE FIRST -- initiate every `requires_permission` line NOW
-   via a latchkey permission request (see the `connect-external-service` skill; the request
-   opens the approval/login flow in the Imbue Studio app), wire up any
-   `requires_secret` values, start the services, and get the app showing
-   THE USER'S OWN DATA. Done for a data-backed app means the user can open it
-   and see their own data -- NOT that a service starts or an endpoint returns
-   200. Then tell them it is live and to take a look.
-4. Only AFTER that (or immediately, if they chose different connectors -- the
-   swap is then the first adaptation) ask: "How do you want to adapt it?"
+3. Ask whether they want to use the same connectors (their Mac's Wispr Flow folder).
+   If YES: ACTIVATE FIRST -- initiate the read-only `file-sharing` permission request
+   for `~/Library/Application Support/Wispr Flow` (with sync enabled) NOW via a latchkey
+   permission request (see the `connect-external-service` and `file-sharing` skills), wait
+   for approval, run `wispr-mac-link refresh` and `wispr-transcribe --check`, confirm
+   `http://127.0.0.1:8122/api/health` returns `"ok": true`, and open the app or test it
+   live.
+4. Only AFTER that ask: "How do you want to adapt it?" (for example, wiring an existing
+   writing or notes app to `http://127.0.0.1:8122/api/transcribe` or
+   `/v1/audio/transcriptions` to replace Safari speech-to-text).
 5. Work through each requirement interactively, one at a time. Translate each
    into plain language, ask for a decision only when you genuinely need one,
    and resolve the obvious ones yourself.
@@ -176,6 +183,8 @@ appends one entry per version (newest last); earlier entries are never rewritten
 This is distinct from "Adaptation history" below, which is the ADOPTERS' log.
 
 ### v1 (2026-11-04) -- first publication: the app, the command line, the Mac bridge, and the setup and investigation documents.
+
+### v2 (2026-11-24) -- read-only Mac file-sharing setup (no Mac bridge needed), iOS Safari M4A fix, always-on service, OpenAI-compatible /v1/audio/transcriptions endpoint, and drop-in STT setup instructions.
 
 ## Adaptation history
 

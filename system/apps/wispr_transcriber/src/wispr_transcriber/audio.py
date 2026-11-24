@@ -2,6 +2,7 @@
 
 import shutil
 import subprocess
+import tempfile
 
 # What the desktop app sends, and the only thing the service reads: raw 16 kHz mono
 # 16-bit little-endian samples, with no container around them.
@@ -25,25 +26,31 @@ def ffmpeg_path() -> str:
 
 
 def to_pcm(data: bytes) -> bytes:
-    """Decode any audio ffmpeg understands (m4a, mp3, wav, ogg, ...) into 16 kHz mono PCM.
+    """Decode any audio ffmpeg understands (m4a, mp4, mp3, wav, ogg, webm, ...) into 16 kHz mono PCM.
+
+    Writes to a seekable temp file rather than piping stdin: MP4/M4A recordings from iOS Safari
+    and Voice Memos put their ``moov`` atom at the end of the file, which fails on an unseekable
+    pipe once the recording exceeds ffmpeg's probe buffer.
 
     ffmpeg resamples properly, which matters: naive downsampling of a 44.1 kHz recording
     aliases and costs real accuracy in the transcript.
     """
     if not data:
         raise AudioError("The audio file was empty.")
-    proc = subprocess.run(
-        [
-            ffmpeg_path(), "-hide_banner", "-loglevel", "error",
-            "-i", "pipe:0",
-            "-ac", str(CHANNELS), "-ar", str(SAMPLE_RATE),
-            "-f", "s16le", "-acodec", "pcm_s16le",
-            "pipe:1",
-        ],
-        input=data,
-        capture_output=True,
-        timeout=180,
-    )
+    with tempfile.NamedTemporaryFile(suffix=".audio") as tmp:
+        tmp.write(data)
+        tmp.flush()
+        proc = subprocess.run(
+            [
+                ffmpeg_path(), "-hide_banner", "-loglevel", "error",
+                "-i", tmp.name,
+                "-ac", str(CHANNELS), "-ar", str(SAMPLE_RATE),
+                "-f", "s16le", "-acodec", "pcm_s16le",
+                "pipe:1",
+            ],
+            capture_output=True,
+            timeout=180,
+        )
     if proc.returncode != 0 or not proc.stdout:
         detail = proc.stderr.decode(errors="replace").strip().splitlines()
         raise AudioError(

@@ -267,7 +267,7 @@ def api_refresh_signin() -> Response:
 @app.route("/api/transcribe", methods=["POST"])
 def api_transcribe() -> Response:
     """Transcribe an uploaded recording, in any format ffmpeg reads."""
-    upload = request.files.get("audio")
+    upload = request.files.get("audio") or request.files.get("file")
     if upload is None:
         abort(400, "No audio file came with that request.")
     data = upload.read(MAX_UPLOAD_BYTES + 1)
@@ -277,6 +277,35 @@ def api_transcribe() -> Response:
         return jsonify(transcribe_bytes(data, "upload", upload.filename or "recording"))
     except audio.AudioError as error:
         abort(400, str(error))
+
+
+@app.route("/v1/audio/transcriptions", methods=["POST"])
+def openai_audio_transcriptions() -> Response:
+    """OpenAI Whisper-compatible drop-in transcription endpoint.
+
+    Accepts multipart ``file`` (or ``audio``) and optional ``response_format``
+    (``json`` default -> ``{"text": ...}``, ``text`` -> plain text,
+    ``verbose_json`` -> full summary with ``text``).
+    """
+    upload = request.files.get("file") or request.files.get("audio")
+    if upload is None:
+        abort(400, "No audio file came with that request (expected multipart field 'file').")
+    data = upload.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        abort(413, "That file is over 40 MB. Trim the recording and try again.")
+    response_format = (request.form.get("response_format") or "json").strip().lower()
+    if response_format not in ("json", "text", "verbose_json"):
+        abort(400, f"Unsupported response_format {response_format!r}; use json, text, or verbose_json.")
+    try:
+        summary = transcribe_bytes(data, "api", upload.filename or "recording")
+    except audio.AudioError as error:
+        abort(400, str(error))
+    text = summary.get("formatted") or summary.get("raw") or ""
+    if response_format == "text":
+        return Response(text, mimetype="text/plain; charset=utf-8")
+    if response_format == "verbose_json":
+        return jsonify({**summary, "text": text})
+    return jsonify({"text": text})
 
 
 @app.route("/api/speak", methods=["POST"])

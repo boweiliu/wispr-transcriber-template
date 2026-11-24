@@ -13,43 +13,44 @@ Didn't work? Create a Studio workspace and paste this to your agent:
 
 ## Why you care
 
-Turn speech into text through your own Wispr Flow account, with no official API: press record, and see both the word-for-word transcript and Wispr's cleaned-up version.
+Turn speech into text through your own Wispr Flow account, with no official API: drop-in HTTP/OpenAI speech-to-text for phone or web apps plus a recorder page.
 
-Wispr Flow is very good at turning speech into clean writing — it strips the "um"s, fixes
-the numbers, and keeps your tone. What it does not have is a door you can walk through:
-their API is closed, and their docs say they are not taking new partners.
+Wispr Flow turns messy speech into punctuated, clean writing -- stripping "um"s and
+fixing numbers and punctuation. Their official API is closed to new partners. This gives
+your workspace that same transcription using **your own Wispr Flow account**, as an
+always-on local speech-to-text service any app in your workspace can call (including a
+writing or notes app you open in Safari on your phone).
 
-This gives your workspace that door, using **your own Wispr Flow account**. Dictate into a
-page, hand it a voice memo, or call it from a script, and get back text as good as the one
-their app writes into your editor. Nothing on your Mac is touched — no patching, no
-re-signing, no settings changed. If you already pay for Wispr Flow, this is the rest of
-what you are paying for.
+Nothing on your Mac is modified or installed -- no patching, no re-signing, no Terminal
+script. Just one read-only folder share.
 
 ## How to use it
 
-1. **Say yes when your agent asks for access to a folder on your Mac.** One grant, on
-   `~/tmp`. It is how your Wispr Flow sign-in gets across.
-2. **Double-click one file on your Mac.** Your agent puts it there and tells you where; a
-   Terminal window opens, installs a small helper, and says it is running. Once only.
-3. **Open the app and press record.** Speak, press again, and your words come back as text.
+1. **Approve one read-only folder share on your Mac.** Your agent requests read-only
+   access to `~/Library/Application Support/Wispr Flow` (with synced copy turned on).
+   One click in Imbue Studio -- no helper to install on your Mac.
+2. **Use it from the recorder page or wire it into any app.** Open the Wispr Transcriber
+   page to dictate and test, or have your agent point any existing app's speech-to-text
+   button at `http://127.0.0.1:8122/api/transcribe` (or the OpenAI Whisper-compatible
+   `http://127.0.0.1:8122/v1/audio/transcriptions`).
 
-You need a Mac with Wispr Flow installed and signed in — that account is what does the
-work. After setup, transcribing does not need your Mac at all; it only has to be awake
-about once a week so the sign-in stays fresh, which happens anyway if you use Wispr Flow.
+You need a Mac with Wispr Flow installed and signed in. After that one approval,
+transcribing does not need your Mac awake at all; Wispr Flow only needs to have run on
+your Mac within the last ~5 days so its own token stays fresh.
 
 ## Ideas for making it yours
 
-- **Dictate straight into your notes.** The app has a plain HTTP interface, so another app
-  or agent in your workspace can hand it audio and get text back.
-- **Transcribe a pile of recordings at once.** `wispr-transcribe <file>` works on any
-  format, so a folder of voice memos becomes a folder of text with a one-line loop.
+- **Replace Safari speech-to-text in a phone writing app.** Record with `MediaRecorder`
+  (`audio/mp4` on iOS Safari), POST to your app's own backend, and forward to
+  `http://127.0.0.1:8122/api/transcribe` or `/v1/audio/transcriptions` for punctuated,
+  Wispr-quality text.
+- **Transcribe a pile of voice memos at once.** `wispr-transcribe <file>` handles `.m4a`,
+  `.mp3`, `.webm`, `.wav`, and anything else ffmpeg reads.
 - **Send your own vocabulary.** The desktop app passes your personal dictionary along with
-  the audio and this one does not, so unusual names can come back misspelled. The fields
-  are already in the included message format, waiting to be filled in.
-- **Record from the Mac's own microphone.** ffmpeg is usually already there; it needs a
-  microphone permission for the helper, which is a decision worth making deliberately.
-- **Keep a searchable record.** Every run already saves its audio and the full reply, so a
-  search page over your own dictation history is a small addition.
+  the audio and this client does not yet; the fields are already in the included `.proto`,
+  ready to fill from `config.json`.
+- **Keep a searchable dictation archive.** Every run already saves its audio and Wispr's
+  full unprocessed reply under `data/.apps/wispr-transcriber/runs/`.
 
 ## What this is
 

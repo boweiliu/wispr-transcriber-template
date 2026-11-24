@@ -4,7 +4,7 @@ None of these touch Wispr's servers or the Mac: the one call that leaves the mac
 behind `flow_client.transcribe`, and the tests that need a result hand in a fake. Run them
 from the repo root:
 
-    PYTHONPATH=src uv run --no-sync pytest .external_worktrees/wispr-transcriber -m '' --no-cov
+    PYTHONPATH=src uv run --no-sync pytest system/apps/wispr_transcriber -m '' --no-cov
 
 The live paths are exercised by hand instead, with `wispr-transcribe --check` (real audio,
 real servers) and `wispr-mac-link status` -- see the README's verification ladder.
@@ -51,6 +51,19 @@ def test_the_browsers_own_format_converts() -> None:
         input=source, capture_output=True, check=True,
     ).stdout
     assert audio.duration_seconds(audio.to_pcm(encoded)) == pytest.approx(1.0, abs=0.1)
+
+
+def test_long_m4a_with_trailing_moov_converts(tmp_path) -> None:
+    """iOS Safari MediaRecorder and Voice Memos produce MP4/M4A with the moov atom at the end."""
+    m4a_path = tmp_path / "safari.m4a"
+    subprocess.run(
+        [audio.ffmpeg_path(), "-y", "-hide_banner", "-loglevel", "error",
+         "-f", "lavfi", "-i", "anoisesrc=duration=15", "-c:a", "aac", "-b:a", "128k",
+         str(m4a_path)],
+        check=True, capture_output=True,
+    )
+    pcm = audio.to_pcm(m4a_path.read_bytes())
+    assert audio.duration_seconds(pcm) == pytest.approx(15.0, abs=0.2)
 
 
 def test_a_file_that_is_not_audio_is_refused_in_plain_words() -> None:
@@ -209,6 +222,86 @@ def test_deskrun_returns_just_the_output_on_success(tmp_path, monkeypatch) -> No
     assert mac_link.deskrun("echo CONNECT_OK").strip() == "CONNECT_OK"
 
 
+def _sample_session_json(expires_in: int = 86400) -> str:
+    inner = json.dumps({
+        "access_token": "tok-example-12345",
+        "expires_at": int(time.time()) + expires_in,
+        "user": {"email": "adopter@example.com"},
+    })
+    return json.dumps({"sb-example-auth-token": inner})
+
+
+def test_refresh_from_synced_folder_reads_session_and_config(tmp_path, monkeypatch) -> None:
+    support = tmp_path / "synced_folders" / "host-abc" / "Users" / "alice" / "Library" / "Application Support" / "Wispr Flow"
+    support.mkdir(parents=True)
+    (support / "session.json").write_text(_sample_session_json())
+    (support / "config.json").write_text(json.dumps({"prefs": {"user": {"uuid": "u-1"}, "sessionId": "s-1"}}))
+
+    creds_path = tmp_path / "data" / "credentials.json"
+    monkeypatch.setattr(mac_link, "DATA_DIR", creds_path.parent)
+    monkeypatch.setattr(mac_link, "CREDENTIALS_PATH", creds_path)
+    monkeypatch.setattr(mac_link, "_home_candidates", lambda: [tmp_path])
+    monkeypatch.delenv("WISPR_FLOW_SUPPORT_DIR", raising=False)
+
+    payload = mac_link.refresh()
+    assert payload["access_token"] == "tok-example-12345"
+    assert payload["email"] == "adopter@example.com"
+    assert payload["user_uuid"] == "u-1"
+    assert payload["session_id"] == "s-1"
+    assert payload["source"] == "synced_folder"
+    assert (creds_path.stat().st_mode & 0o777) == 0o600
+    assert mac_link.status()["signed_in"] is True
+
+
+def test_refresh_from_file_sharing_discovers_grant_and_fetches(tmp_path, monkeypatch) -> None:
+    creds_path = tmp_path / "data" / "credentials.json"
+    monkeypatch.setattr(mac_link, "DATA_DIR", creds_path.parent)
+    monkeypatch.setattr(mac_link, "CREDENTIALS_PATH", creds_path)
+    monkeypatch.setattr(mac_link, "_home_candidates", lambda: [tmp_path])
+    monkeypatch.delenv("WISPR_FLOW_SUPPORT_DIR", raising=False)
+    monkeypatch.delenv("MINDS_MAC_DEVICE", raising=False)
+
+    session_bytes = _sample_session_json().encode("utf-8")
+    config_bytes = json.dumps({"prefs": {"user": {"uuid": "u-2"}, "sessionId": "s-2"}}).encode("utf-8")
+
+    def fake_latchkey(args, binary=False, timeout=60):
+        joined = " ".join(args)
+        if "/devices" in joined:
+            return json.dumps({"devices": [{"device_id": "host-111"}]})
+        if "/permissions/self" in joined:
+            return json.dumps({
+                "rules": [
+                    {"latchkey-self": [
+                        "minds-file-server-read-host-111:/Users/alice/Library/Application Support/Wispr Flow"
+                    ]}
+                ]
+            })
+        if "session.json" in joined:
+            return session_bytes if binary else session_bytes.decode()
+        if "config.json" in joined:
+            return config_bytes if binary else config_bytes.decode()
+        raise AssertionError(f"Unexpected latchkey call: {args}")
+
+    monkeypatch.setattr(mac_link, "_latchkey", fake_latchkey)
+    payload = mac_link.refresh()
+    assert payload["access_token"] == "tok-example-12345"
+    assert payload["user_uuid"] == "u-2"
+    assert payload["source"] == "file_sharing"
+
+
+def test_refresh_raises_clear_error_when_no_access_configured(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(mac_link, "_home_candidates", lambda: [tmp_path])
+    monkeypatch.setattr(mac_link, "WORKBENCH_CONFIG", tmp_path / "none")
+    monkeypatch.setattr(mac_link, "DESKRUN", tmp_path / "missing-deskrun")
+    monkeypatch.delenv("WISPR_FLOW_SUPPORT_DIR", raising=False)
+    monkeypatch.delenv("MINDS_MAC_HOME", raising=False)
+    monkeypatch.setattr(mac_link, "find_file_sharing_grant", lambda: None)
+
+    with pytest.raises(mac_link.MacLinkError) as caught:
+        mac_link.refresh()
+    assert "Wispr Flow" in str(caught.value)
+
+
 # ---- The routes ------------------------------------------------------------------------------
 
 
@@ -325,3 +418,36 @@ def test_every_page_carries_its_content_rules(client) -> None:
     policy = client.get("/").headers["Content-Security-Policy"]
     assert "default-src 'self'" in policy
     assert "'unsafe-inline'" not in policy.split("script-src")[1].split(";")[0]
+
+
+def test_v1_audio_transcriptions_openai_drop_in(client, monkeypatch) -> None:
+    monkeypatch.setattr(mac_link, "access_token", lambda auto_refresh=True: "fake-token")
+    monkeypatch.setattr(mac_link, "load", lambda: {"email": "adopter@example.com"})
+    monkeypatch.setattr(flow_client, "transcribe", lambda *a, **k: flow_client.Transcript(
+        formatted="Hello from my phone essay tool.",
+        raw="um hello from my phone essay tool",
+        status="RESULT_STATUS_FORMATTED", origin="canto_1.0.1", server="bt-deployment-test",
+        audio_seconds=1.5, round_trip_seconds=0.4, messages=5, responses=[{"result": {}}],
+    ))
+
+    wav = make_wav(seconds=1.5, rate=16000, channels=1)
+
+    res_json = client.post("/v1/audio/transcriptions", data={"file": (io.BytesIO(wav), "dictation.m4a")})
+    assert res_json.status_code == 200
+    assert res_json.get_json() == {"text": "Hello from my phone essay tool."}
+
+    res_text = client.post(
+        "/v1/audio/transcriptions",
+        data={"file": (io.BytesIO(wav), "dictation.m4a"), "response_format": "text"},
+    )
+    assert res_text.status_code == 200
+    assert res_text.get_data(as_text=True) == "Hello from my phone essay tool."
+
+    res_verbose = client.post(
+        "/v1/audio/transcriptions",
+        data={"file": (io.BytesIO(wav), "dictation.m4a"), "response_format": "verbose_json"},
+    )
+    assert res_verbose.status_code == 200
+    body = res_verbose.get_json()
+    assert body["text"] == "Hello from my phone essay tool."
+    assert body["raw"] == "um hello from my phone essay tool"

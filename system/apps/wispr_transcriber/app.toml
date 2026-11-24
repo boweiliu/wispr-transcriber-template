@@ -1,14 +1,14 @@
 name = "wispr-transcriber"
 display_name = "Wispr Transcriber"
-description = "Turn speech into text through your own Wispr Flow account: upload a recording or have your Mac speak one, and see both the word-for-word transcript and Wispr's cleaned-up version."
+description = "Turn speech into text through your own Wispr Flow account: drop-in speech-to-text API and recorder page showing both the word-for-word transcript and Wispr's cleaned-up version."
 icon = "icon.svg"
 priority = "user"
 program = "wispr-transcriber"
-stop_when_no_windows = true
+stop_when_no_windows = false
 
 [[references]]
-path = ".agents/skills/local-print-bridge"
-note = "deskrun, the one-command channel to the Mac that this app uses to copy the Wispr Flow sign-in."
+path = "README.md"
+note = "How the connection to Wispr Flow works, how to set it up with file sharing, how to wire other apps to its HTTP API, and how to verify it."
 
 # How update-app boots a throwaway preview of this app: on a free port, over a
 # scratch copy of its data.

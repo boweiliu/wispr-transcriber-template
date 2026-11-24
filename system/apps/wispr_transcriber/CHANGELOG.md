@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-11-24 — read-only file-sharing setup, iOS Safari M4A fix, and drop-in STT API
+
+- Read Wispr Flow's `session.json` directly through a single read-only Imbue Studio
+  file-sharing grant on `~/Library/Application Support/Wispr Flow` (synced folder first,
+  then direct WebDAV read), eliminating the need to install `local-print-bridge` /
+  `deskrun` on the Mac. Existing `deskrun` workspaces still work as a fallback.
+- Decode audio via a seekable temporary file in `audio.to_pcm()` so non-fragmented
+  MP4/M4A recordings from iOS Safari and Voice Memos (trailing `moov` atom) convert
+  cleanly at any length. Updated browser recording to support `audio/mp4` with `.m4a`
+  filenames.
+- Added an OpenAI Whisper-compatible `POST /v1/audio/transcriptions` endpoint (`json`,
+  `text`, and `verbose_json` formats) alongside `POST /api/transcribe`.
+- Changed `app.toml` to `stop_when_no_windows = false` so the HTTP service stays running
+  when other workspace apps (such as a phone essay or notes tool) call it in the
+  background.
+- Hid the optional "let your Mac speak" control in the web UI unless `deskrun` is present,
+  and added an in-page sign-in refresh button when credentials are missing or expired.
+- Rewrote the README with step-by-step setup and drop-in Safari/phone STT wiring
+  instructions for adopting agents.
+
 ## 2026-11-04 — first version
 
 - Transcribe speech through your own Wispr Flow account, from inside an Imbue Studio

@@ -10,23 +10,33 @@ cli.py / runner.py   the two front doors: a command, and a web page
     +-- flow_client.py   the one call that leaves the machine
 ```
 
-- **`audio.py`** shells out to ffmpeg. It never trusts the input: an unreadable file raises
-  `AudioError` with a sentence the page can show. ffmpeg also resamples properly, which
-  matters — naive downsampling of a 44.1 kHz recording aliases and costs real accuracy.
-- **`mac_link.py`** owns everything to do with the Mac. `status()` answers "is there a usable
-  sign-in, and is the Mac needed", which is the only question the rest of the app asks.
-  `refresh()` is the one function that reaches out.
+- **`audio.py`** shells out to ffmpeg using a seekable temporary file (so non-fragmented
+  MP4/M4A recordings from iOS Safari and Voice Memos with a trailing `moov` atom decode
+  cleanly). It never trusts the input: an unreadable file raises `AudioError` with a
+  sentence the page can show. ffmpeg also resamples properly, which matters — naive
+  downsampling of a 44.1 kHz recording aliases and costs real accuracy.
+- **`mac_link.py`** owns everything to do with the Mac sign-in. `status()` is purely local
+  and answers "is there a usable sign-in, and is a refresh needed". `refresh()` tries three
+  sources in order: (1) a locally synced `~/Library/Application Support/Wispr Flow` folder
+  under `~/synced_folders/` (or `WISPR_FLOW_SUPPORT_DIR`), (2) a direct read-only Imbue
+  Studio file-sharing grant discovered from `/permissions/self`, and (3) the legacy
+  `deskrun` bridge fallback if installed.
 - **`flow_client.py`** holds the gRPC call and the knowledge of Wispr's stream shape. It
   turns every gRPC failure into a `FlowError` carrying a sentence a person can act on.
-- **`runner.py`** is Flask, threaded, serving at `/`. It owns the word diff and the saving.
+- **`runner.py`** is Flask, threaded, serving at `/` along with `/api/transcribe` and an
+  OpenAI Whisper-compatible `/v1/audio/transcriptions` drop-in endpoint. `app.toml` sets
+  `stop_when_no_windows = false` so the HTTP service stays available to other workspace
+  apps even when its own window is closed. It owns the word diff and the saving.
 
 ## Safety rules built in
 
+- **Read-only by default.** Normal setup only requests read-only file sharing on
+  `~/Library/Application Support/Wispr Flow` — no write grants and no Mac helper daemon.
 - **The token is read, never renewed.** See `docs/investigation.md`; renewing from here could
   sign the user out of Wispr Flow on their Mac.
-- **The token is handed over as a file, not printed.** The Mac bridge leaves every command's
-  output behind in `cmd_done/` on the Mac. `refresh()` writes the credentials to a scratch
-  file, fetches it, and deletes it, so the token never lands in that log.
+- **The legacy bridge path hands the token over as a file, not printed.** When the optional
+  `deskrun` fallback is used, `refresh()` writes credentials to a scratch file, fetches it,
+  and deletes it so the token never lands in `cmd_done/`.
 - **The stored copy is mode 600**, written with `os.open(..., 0o600)` rather than chmod after
   the fact, so it is never briefly world-readable.
 - **Caps before anything is sent:** 40 MB upload, 4 minutes of audio, 400 characters for a
